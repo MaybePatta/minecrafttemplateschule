@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Simple Three.js Scene</title>
+    <title>Minecraft 3D Terrain</title>
     <style>
-        body { margin: 0; }
-        canvas { width: 100%; height: 100%; }
+        body { margin: 0; overflow: hidden; }
+        canvas { width: 100%; height: 100%; display: block; }
     </style>
 </head>
 <body>
@@ -14,25 +14,110 @@
 <script>
     // Set up the scene, camera, and renderer
     const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    const renderer = new THREE.WebGLRenderer();
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
 
     // Set the renderer size and add it to the document
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // Create a cube geometry and material
+    // Create textures for different block types
+    function createTexture(color1, color2, gridSize = 8) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const context = canvas.getContext('2d');
+
+        // Fill the background
+        context.fillStyle = color1;
+        context.fillRect(0, 0, 64, 64);
+
+        // Draw a simple grid pattern
+        context.fillStyle = color2;
+        const size = canvas.width / gridSize;
+
+        for (let x = 0; x < gridSize; x++) {
+            for (let y = 0; y < gridSize; y++) {
+                // Create a checkerboard pattern
+                if ((x + y) % 2 === 0) {
+                    context.fillRect(x * size, y * size, size, size);
+                }
+            }
+        }
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+
+        return texture;
+    }
+
+    // Create different block materials with textures
+    const grassTexture = createTexture('#5ab552', '#3f8f3a');
+    const dirtTexture = createTexture('#8B4513', '#603000');
+    const stoneTexture = createTexture('#7f7f7f', '#6b6b6b');
+
+    const materials = {
+        grass: new THREE.MeshLambertMaterial({ map: grassTexture }),
+        dirt: new THREE.MeshLambertMaterial({ map: dirtTexture }),
+        stone: new THREE.MeshLambertMaterial({ map: stoneTexture })
+    };
+
+    // Add lighting to make the scene look better
+    const ambientLight = new THREE.AmbientLight(0x606060);
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(1, 1, 0.5).normalize();
+    scene.add(directionalLight);
+
+    // Block geometry (shared for all blocks)
     const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
 
     // Position the camera
-    camera.position.set(16, 16, 32);
-    camera.lookAt(16, 0, 16);
+    camera.position.set(32, 32, 64);
+    camera.lookAt(32, 0, 32);
 
     // Add OrbitControls
     const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.target.set(16, 0, 16); // Set the center point to orbit around
+    controls.target.set(32, 0, 32); // Set the center point to orbit around
     controls.update();
+
+    // Simple noise function for terrain generation
+    // Returns a value between -1 and 1
+    function noise(x, z) {
+        return Math.sin(x * 0.1) * Math.cos(z * 0.1) * 2 +
+               Math.sin(x * 0.3 + 5) * Math.cos(z * 0.5) * 0.8;
+    }
+
+    // Create a larger, more interesting 3D world
+    function setupWorld(size) {
+        // Use a larger world size
+        for (let x = 0; x < size; x++) {
+            for (let z = 0; z < size; z++) {
+                // Calculate height based on position using our noise function
+                const height = Math.floor(noise(x, z) + 4); // Add 4 to make height mostly positive
+
+                // Create "grass" blocks on top
+                const topBlock = new THREE.Mesh(geometry, materials.grass);
+                topBlock.position.set(x, height, z);
+                scene.add(topBlock);
+
+                // Fill in dirt and stone below the surface
+                for (let y = height - 1; y >= 0; y--) {
+                    // Use dirt for the first 3 blocks below the surface
+                    const material = (y >= height - 3) ? materials.dirt : materials.stone;
+                    const block = new THREE.Mesh(geometry, material);
+                    block.position.set(x, y, z);
+                    scene.add(block);
+                }
+            }
+        }
+
+        console.log(`Created a 3D world of size ${size}x${size}`);
+    }
 
     // Animation loop
     function animate() {
@@ -41,30 +126,17 @@
         renderer.render(scene, camera);
     }
 
-    function setupWorld(size) {
-        for (let x = 0; x < size; x++) {
-            for (let z = 0; z < size; z++) {
-                const cube = new THREE.Mesh(geometry, material);
-                cube.position.set(x, 0, z);
-                scene.add(cube);
-            }
-        }
-        console.log(`Created a world of size ${size}x${size} (${size*size} blocks)`);
-    }
-
     // Handle window resizing
     window.addEventListener('resize', () => {
         const newWidth = window.innerWidth;
         const newHeight = window.innerHeight;
-
         camera.aspect = newWidth / newHeight;
         camera.updateProjectionMatrix();
-
         renderer.setSize(newWidth, newHeight);
     });
 
-    // Start the animation and setup the world
-    setupWorld(32);
+    // Create a 64x64 world (larger than the original 32x32)
+    setupWorld(64);
     animate();
 </script>
 </body>
