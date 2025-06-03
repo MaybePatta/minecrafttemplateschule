@@ -1,46 +1,222 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
     <meta charset="UTF-8">
-    <title>Minecraft 3D Terrain</title>
+    <title>Minecraft 3D Terrain - Mit korrigierter Steuerung</title>
     <style>
-        body { margin: 0; overflow: hidden; }
-        canvas { width: 100%; height: 100%; display: block; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            min-width: 200px;
+        }
+        .control-group {
+            margin-bottom: 15px;
+        }
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+        .control-group input[type="range"] {
+            width: 100%;
+            margin-bottom: 5px;
+        }
+        .control-group input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        .value-display {
+            font-size: 11px;
+            color: #ccc;
+        }
+        .exploration-info {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            display: none;
+        }
+        .performance-info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 11px;
+        }
     </style>
 </head>
 <body>
+<div class="controls">
+    <div class="control-group">
+        <label for="worldSize">Weltgröße:</label>
+        <input type="range" id="worldSize" min="32" max="96" value="48" step="16">
+        <div class="value-display" id="worldSizeValue">48x48</div>
+    </div>
+
+    <div class="control-group">
+        <label for="noiseScale">Noise-Intensität:</label>
+        <input type="range" id="noiseScale" min="0.02" max="0.15" value="0.08" step="0.01">
+        <div class="value-display" id="noiseScaleValue">0.08</div>
+    </div>
+
+    <div class="control-group">
+        <label for="worldHeight">Welt-Höhe:</label>
+        <input type="range" id="worldHeight" min="2" max="8" value="4" step="1">
+        <div class="value-display" id="worldHeightValue">4</div>
+    </div>
+
+    <div class="control-group">
+        <label for="mountainHeight">Berg-Höhe:</label>
+        <input type="range" id="mountainHeight" min="0" max="15" value="8" step="1">
+        <div class="value-display" id="mountainHeightValue">8</div>
+    </div>
+
+    <div class="control-group">
+        <input type="checkbox" id="explorationMode">
+        <label for="explorationMode" style="display: inline;">Erkundungsmodus</label>
+    </div>
+
+    <button onclick="regenerateWorld()" style="width: 100%; padding: 8px; margin-top: 10px;">
+        Welt neu generieren
+    </button>
+</div>
+
+<div class="exploration-info" id="explorationInfo">
+    <strong>Erkundungsmodus aktiv</strong><br>
+    W - Vorwärts, S - Rückwärts<br>
+    A - Links, D - Rechts<br>
+    Leertaste - Springen<br>
+    <span style="color: #90EE90;">✓ Korrekte Steuerung</span>
+</div>
+
+<div class="performance-info" id="performanceInfo">
+    Blöcke: <span id="blockCount">0</span><br>
+    FPS: <span id="fpsCounter">60</span><br>
+    Position: <span id="playerPosition">0, 0, 0</span>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
 <script>
-    // Set up the scene, camera, and renderer
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+    // Globale Variablen
+    let scene, camera, renderer, orbitControls, pointerControls;
+    let worldBlocks = [];
+    let instancedMeshes = {};
+    let collisionObjects = [];
+    let heightMap = [];
+    let isExplorationMode = false;
+    let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+    let canJump = false;
+    const velocity = new THREE.Vector3();
+    const direction = new THREE.Vector3();
 
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // Kollisions-Raycaster
+    const raycaster = new THREE.Raycaster();
+    const playerHeight = 1.8;
+    const playerRadius = 0.3;
 
-    // Set the renderer size and add it to the document
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+    // Einstellungen
+    let worldSize = 48;
+    let noiseScale = 0.08;
+    let worldHeight = 4;
+    let mountainHeight = 8;
 
-    // Create textures for different block types
-    function createTexture(color1, color2, gridSize = 8) {
+    // Performance-Tracking
+    let frameCount = 0;
+    let lastTime = performance.now();
+
+    // Szene initialisieren
+    function initScene() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+        renderer = new THREE.WebGLRenderer({
+            antialias: false,
+            powerPreference: "high-performance"
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = false;
+        document.body.appendChild(renderer.domElement);
+
+        // Optimierte Beleuchtung
+        const ambientLight = new THREE.AmbientLight(0x606060, 0.8);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        directionalLight.position.set(50, 50, 25);
+        scene.add(directionalLight);
+
+        // Kamera-Steuerung
+        setupControls();
+
+        // Event Listeners
+        setupEventListeners();
+    }
+
+    // Steuerung einrichten
+    function setupControls() {
+        orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+        orbitControls.target.set(worldSize/2, 0, worldSize/2);
+        orbitControls.enableDamping = true;
+        orbitControls.dampingFactor = 0.1;
+
+        pointerControls = new THREE.PointerLockControls(camera, document.body);
+
+        camera.position.set(worldSize/2, worldSize/2, worldSize);
+        camera.lookAt(worldSize/2, 0, worldSize/2);
+    }
+
+    // Event Listeners
+    function setupEventListeners() {
+        document.getElementById('worldSize').addEventListener('input', updateWorldSize);
+        document.getElementById('noiseScale').addEventListener('input', updateNoiseScale);
+        document.getElementById('worldHeight').addEventListener('input', updateWorldHeight);
+        document.getElementById('mountainHeight').addEventListener('input', updateMountainHeight);
+        document.getElementById('explorationMode').addEventListener('change', toggleExplorationMode);
+
+        document.addEventListener('keydown', onKeyDown);
+        document.addEventListener('keyup', onKeyUp);
+        window.addEventListener('resize', onWindowResize);
+    }
+
+    // Texturen erstellen
+    function createTexture(color1, color2, gridSize = 4) {
         const canvas = document.createElement('canvas');
-        canvas.width = 64;
-        canvas.height = 64;
+        canvas.width = 16;
+        canvas.height = 16;
         const context = canvas.getContext('2d');
 
-        // Fill the background
         context.fillStyle = color1;
-        context.fillRect(0, 0, 64, 64);
+        context.fillRect(0, 0, 16, 16);
 
-        // Draw a simple grid pattern
         context.fillStyle = color2;
         const size = canvas.width / gridSize;
 
         for (let x = 0; x < gridSize; x++) {
             for (let y = 0; y < gridSize; y++) {
-                // Create a checkerboard pattern
                 if ((x + y) % 2 === 0) {
                     context.fillRect(x * size, y * size, size, size);
                 }
@@ -50,11 +226,12 @@
         const texture = new THREE.CanvasTexture(canvas);
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.RepeatWrapping;
-
+        texture.minFilter = THREE.NearestFilter;
+        texture.magFilter = THREE.NearestFilter;
         return texture;
     }
 
-    // Create different block materials with textures
+    // Materialien erstellen
     const grassTexture = createTexture('#5ab552', '#3f8f3a');
     const dirtTexture = createTexture('#8B4513', '#603000');
     const stoneTexture = createTexture('#7f7f7f', '#6b6b6b');
@@ -65,78 +242,337 @@
         stone: new THREE.MeshLambertMaterial({ map: stoneTexture })
     };
 
-    // Add lighting to make the scene look better
-    const ambientLight = new THREE.AmbientLight(0x606060);
-    scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(1, 1, 0.5).normalize();
-    scene.add(directionalLight);
-
-    // Block geometry (shared for all blocks)
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-
-    // Position the camera
-    camera.position.set(32, 32, 64);
-    camera.lookAt(32, 0, 32);
-
-    // Add OrbitControls
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.target.set(32, 0, 32); // Set the center point to orbit around
-    controls.update();
-
-    // Simple noise function for terrain generation
-    // Returns a value between -1 and 1
+    // Erweiterte Noise-Funktion für Berge
     function noise(x, z) {
-        return Math.sin(x * 0.1) * Math.cos(z * 0.1) * 2 +
-               Math.sin(x * 0.3 + 5) * Math.cos(z * 0.5) * 0.8;
+        const baseNoise = Math.sin(x * noiseScale) * Math.cos(z * noiseScale) * 2 +
+            Math.sin(x * noiseScale * 3 + 5) * Math.cos(z * noiseScale * 5) * 0.8;
+
+        const mountainNoise = Math.sin(x * noiseScale * 0.3) * Math.cos(z * noiseScale * 0.3) * mountainHeight +
+            Math.sin(x * noiseScale * 0.15 + 10) * Math.cos(z * noiseScale * 0.2 + 7) * (mountainHeight * 0.6);
+
+        return baseNoise + Math.max(0, mountainNoise * 0.7);
     }
 
-    // Create a larger, more interesting 3D world
-    function setupWorld(size) {
-        // Use a larger world size
-        for (let x = 0; x < size; x++) {
-            for (let z = 0; z < size; z++) {
-                // Calculate height based on position using our noise function
-                const height = Math.floor(noise(x, z) + 4); // Add 4 to make height mostly positive
+    // Kollisionserkennung - Prüfe ob Position frei ist
+    function isPositionFree(x, y, z) {
+        const blockX = Math.floor(x);
+        const blockY = Math.floor(y);
+        const blockZ = Math.floor(z);
 
-                // Create "grass" blocks on top
-                const topBlock = new THREE.Mesh(geometry, materials.grass);
-                topBlock.position.set(x, height, z);
-                scene.add(topBlock);
+        if (blockX < 0 || blockX >= worldSize || blockZ < 0 || blockZ >= worldSize) {
+            return false;
+        }
 
-                // Fill in dirt and stone below the surface
-                for (let y = height - 1; y >= 0; y--) {
-                    // Use dirt for the first 3 blocks below the surface
-                    const material = (y >= height - 3) ? materials.dirt : materials.stone;
-                    const block = new THREE.Mesh(geometry, material);
-                    block.position.set(x, y, z);
-                    scene.add(block);
+        if (heightMap[blockX] && heightMap[blockX][blockZ] !== undefined) {
+            const groundHeight = heightMap[blockX][blockZ];
+            return y > groundHeight + 0.1;
+        }
+
+        return true;
+    }
+
+    // Boden-Höhe an Position ermitteln
+    function getGroundHeight(x, z) {
+        const blockX = Math.floor(x);
+        const blockZ = Math.floor(z);
+
+        if (blockX < 0 || blockX >= worldSize || blockZ < 0 || blockZ >= worldSize) {
+            return worldHeight;
+        }
+
+        if (heightMap[blockX] && heightMap[blockX][blockZ] !== undefined) {
+            return heightMap[blockX][blockZ];
+        }
+
+        return worldHeight;
+    }
+
+    // Optimierte Welt-Erstellung mit Kollisionsobjekten
+    function setupWorld() {
+        // Alte Objekte entfernen
+        Object.values(instancedMeshes).forEach(mesh => {
+            scene.remove(mesh);
+            if (mesh.geometry) mesh.geometry.dispose();
+        });
+        instancedMeshes = {};
+        collisionObjects = [];
+
+        // Höhen-Map erstellen
+        heightMap = [];
+        for (let x = 0; x < worldSize; x++) {
+            heightMap[x] = [];
+            for (let z = 0; z < worldSize; z++) {
+                heightMap[x][z] = Math.floor(noise(x, z) + worldHeight);
+            }
+        }
+
+        // Blöcke zählen und Positionen sammeln
+        const blockPositions = { grass: [], dirt: [], stone: [] };
+        let totalBlocks = 0;
+
+        for (let x = 0; x < worldSize; x++) {
+            for (let z = 0; z < worldSize; z++) {
+                const height = heightMap[x][z];
+                const maxDepth = Math.min(3, height - Math.max(0, height - 8));
+
+                // Oberster Block (Gras)
+                blockPositions.grass.push({ x, y: height, z });
+                totalBlocks++;
+
+                // Blöcke darunter
+                for (let y = height - 1; y >= height - maxDepth && y >= 0; y--) {
+                    const blockType = (y >= height - 2) ? 'dirt' : 'stone';
+
+                    let isVisible = false;
+                    if (x === 0 || x === worldSize - 1 || z === 0 || z === worldSize - 1) {
+                        isVisible = true;
+                    } else {
+                        const neighbors = [
+                            heightMap[x-1] ? heightMap[x-1][z] : 0,
+                            heightMap[x+1] ? heightMap[x+1][z] : 0,
+                            heightMap[x][z-1] || 0,
+                            heightMap[x][z+1] || 0
+                        ];
+                        isVisible = neighbors.some(h => h <= y);
+                    }
+
+                    if (isVisible || y === height - 1) {
+                        blockPositions[blockType].push({ x, y, z });
+                        totalBlocks++;
+                    }
                 }
             }
         }
 
-        console.log(`Created a 3D world of size ${size}x${size}`);
+        // Instanced Meshes erstellen
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+
+        Object.keys(blockPositions).forEach(blockType => {
+            const positions = blockPositions[blockType];
+            if (positions.length === 0) return;
+
+            const instancedMesh = new THREE.InstancedMesh(geometry, materials[blockType], positions.length);
+            const matrix = new THREE.Matrix4();
+
+            positions.forEach((pos, index) => {
+                matrix.setPosition(pos.x, pos.y, pos.z);
+                instancedMesh.setMatrixAt(index, matrix);
+            });
+
+            instancedMesh.instanceMatrix.needsUpdate = true;
+            scene.add(instancedMesh);
+            instancedMeshes[blockType] = instancedMesh;
+        });
+
+        document.getElementById('blockCount').textContent = totalBlocks;
+
+        if (!isExplorationMode) {
+            orbitControls.target.set(worldSize/2, 0, worldSize/2);
+            camera.position.set(worldSize/2, worldSize/2, worldSize);
+            orbitControls.update();
+        }
+
+        console.log(`Optimierte Welt mit Kollision erstellt: ${worldSize}x${worldSize}, ${totalBlocks} Blöcke`);
     }
 
-    // Animation loop
+    // Slider-Updates
+    function updateWorldSize(event) {
+        worldSize = parseInt(event.target.value);
+        document.getElementById('worldSizeValue').textContent = `${worldSize}x${worldSize}`;
+    }
+
+    function updateNoiseScale(event) {
+        noiseScale = parseFloat(event.target.value);
+        document.getElementById('noiseScaleValue').textContent = noiseScale.toFixed(2);
+    }
+
+    function updateWorldHeight(event) {
+        worldHeight = parseInt(event.target.value);
+        document.getElementById('worldHeightValue').textContent = worldHeight;
+    }
+
+    function updateMountainHeight(event) {
+        mountainHeight = parseInt(event.target.value);
+        document.getElementById('mountainHeightValue').textContent = mountainHeight;
+    }
+
+    // Erkundungsmodus umschalten
+    function toggleExplorationMode() {
+        isExplorationMode = document.getElementById('explorationMode').checked;
+        const info = document.getElementById('explorationInfo');
+
+        if (isExplorationMode) {
+            orbitControls.enabled = false;
+            pointerControls.lock();
+            const spawnHeight = getGroundHeight(worldSize/2, worldSize/2) + playerHeight + 1;
+            camera.position.set(worldSize/2, spawnHeight, worldSize/2);
+            info.style.display = 'block';
+        } else {
+            pointerControls.unlock();
+            orbitControls.enabled = true;
+            orbitControls.target.set(worldSize/2, 0, worldSize/2);
+            camera.position.set(worldSize/2, worldSize/2, worldSize);
+            orbitControls.update();
+            info.style.display = 'none';
+        }
+    }
+
+    // Tastatur-Events
+    function onKeyDown(event) {
+        if (!isExplorationMode) return;
+
+        switch (event.code) {
+            case 'KeyW': moveForward = true; break;
+            case 'KeyS': moveBackward = true; break;
+            case 'KeyA': moveLeft = true; break;
+            case 'KeyD': moveRight = true; break;
+            case 'Space':
+                if (canJump) {
+                    velocity.y = 8;
+                    canJump = false;
+                }
+                event.preventDefault();
+                break;
+        }
+    }
+
+    function onKeyUp(event) {
+        if (!isExplorationMode) return;
+
+        switch (event.code) {
+            case 'KeyW': moveForward = false; break;
+            case 'KeyS': moveBackward = false; break;
+            case 'KeyA': moveLeft = false; break;
+            case 'KeyD': moveRight = false; break;
+        }
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function regenerateWorld() {
+        setupWorld();
+    }
+
+    // KORRIGIERTE Bewegung mit Kollisionserkennung
+    function updateMovement(delta) {
+        if (!isExplorationMode) return;
+
+        const currentPosition = pointerControls.getObject().position;
+
+        // Reibung und Schwerkraft
+        velocity.x *= (1 - 8.0 * delta);
+        velocity.z *= (1 - 8.0 * delta);
+        velocity.y -= 25.0 * delta;
+
+        direction.z = Number(moveForward) - Number(moveBackward);
+        direction.x = Number(moveRight) - Number(moveLeft);
+        direction.normalize();
+
+        const moveSpeed = 2.5;
+        const moveDistance = moveSpeed * delta;
+
+        // KORRIGIERTE Horizontale Bewegung - OHNE negative Vorzeichen!
+        if (moveForward || moveBackward) {
+            const forwardVector = new THREE.Vector3();
+            camera.getWorldDirection(forwardVector);
+            forwardVector.y = 0;
+            forwardVector.normalize();
+
+            // HIER WAR DAS PROBLEM: Entfernt das Minuszeichen!
+            const newPosition = currentPosition.clone().add(
+                forwardVector.multiplyScalar(direction.z * moveDistance)
+            );
+
+            // Prüfe Kollision in X und Z separat
+            const testPositionX = new THREE.Vector3(newPosition.x, currentPosition.y, currentPosition.z);
+            const testPositionZ = new THREE.Vector3(currentPosition.x, currentPosition.y, newPosition.z);
+
+            if (isPositionFree(testPositionX.x, testPositionX.y - playerHeight/2, testPositionX.z) &&
+                isPositionFree(testPositionX.x, testPositionX.y + playerHeight/2, testPositionX.z)) {
+                currentPosition.x = testPositionX.x;
+            }
+
+            if (isPositionFree(testPositionZ.x, testPositionZ.y - playerHeight/2, testPositionZ.z) &&
+                isPositionFree(testPositionZ.x, testPositionZ.y + playerHeight/2, testPositionZ.z)) {
+                currentPosition.z = testPositionZ.z;
+            }
+        }
+
+        if (moveLeft || moveRight) {
+            const rightVector = new THREE.Vector3();
+            camera.getWorldDirection(rightVector);
+            rightVector.cross(camera.up);
+            rightVector.y = 0;
+            rightVector.normalize();
+
+            // HIER AUCH: Entfernt das Minuszeichen!
+            const newPosition = currentPosition.clone().add(
+                rightVector.multiplyScalar(direction.x * moveDistance)
+            );
+
+            if (isPositionFree(newPosition.x, currentPosition.y - playerHeight/2, newPosition.z) &&
+                isPositionFree(newPosition.x, currentPosition.y + playerHeight/2, newPosition.z)) {
+                currentPosition.x = newPosition.x;
+                currentPosition.z = newPosition.z;
+            }
+        }
+
+        // Vertikale Bewegung (Schwerkraft und Springen)
+        const newY = currentPosition.y + (velocity.y * delta);
+        const groundHeight = getGroundHeight(currentPosition.x, currentPosition.z);
+
+        if (newY <= groundHeight + playerHeight) {
+            currentPosition.y = groundHeight + playerHeight;
+            velocity.y = 0;
+            canJump = true;
+        } else {
+            currentPosition.y = newY;
+            canJump = false;
+        }
+
+        // Position aktualisieren
+        const pos = currentPosition;
+        document.getElementById('playerPosition').textContent =
+            `${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`;
+    }
+
+    // FPS-Counter
+    function updateFPS() {
+        frameCount++;
+        const currentTime = performance.now();
+        if (currentTime >= lastTime + 1000) {
+            const fps = Math.round((frameCount * 1000) / (currentTime - lastTime));
+            document.getElementById('fpsCounter').textContent = fps;
+            frameCount = 0;
+            lastTime = currentTime;
+        }
+    }
+
+    // Animation
+    const clock = new THREE.Clock();
+
     function animate() {
         requestAnimationFrame(animate);
-        controls.update();
+
+        const delta = clock.getDelta();
+
+        if (isExplorationMode) {
+            updateMovement(delta);
+        } else {
+            orbitControls.update();
+        }
+
+        updateFPS();
         renderer.render(scene, camera);
     }
 
-    // Handle window resizing
-    window.addEventListener('resize', () => {
-        const newWidth = window.innerWidth;
-        const newHeight = window.innerHeight;
-        camera.aspect = newWidth / newHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(newWidth, newHeight);
-    });
-
-    // Create a 64x64 world (larger than the original 32x32)
-    setupWorld(64);
+    // Initialisierung
+    initScene();
+    setupWorld();
     animate();
 </script>
 </body>
